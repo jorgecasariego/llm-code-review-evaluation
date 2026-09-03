@@ -540,16 +540,31 @@ It would also be incorrect to conclude that there are **zero retries**, because 
 
 #### Case 1 — Output
 
-The information needed to answer this isn't in what you've shared.
+Reviewing against the three requirements:
 
-The ticket only describes UI requirements (show amount, description, allow opening details), and the implementation is a `ViewModel` that calls `repository.getTransactions()` — it doesn't show the `TransactionsRepository` implementation, any networking/HTTP client configuration (e.g., OkHttp interceptors, Retrofit), or any retry logic at all.
+- **Loading state**: ✅ Handled. `_uiState` starts as `Loading`, and it's set before the fetch begins (in `init`), so the UI sees it immediately.
+- **Success state**: ✅ Handled. On successful fetch, `Success(transactions)` is emitted.
+- **Error state**: ❌ **Not handled.** There's no `try/catch` around `repository.getTransactions()`. If the call throws, the exception propagates up through `viewModelScope.launch` uncaught — the app crashes instead of surfacing `TransactionsUiState.Error` (or whatever the sealed class's error variant is called). The ticket explicitly requires an error state on failure, and right now nothing produces one.
 
-Retry count and retry delay are backend/network-layer concerns that would live in:
-- The `TransactionsRepository` implementation
-- An HTTP client's retry/interceptor configuration
-- Or possibly server-side retry logic, which wouldn't be visible in Android code at all
+**Fix:**
 
-None of that is present here, so I can't determine the retry count or delay — and I won't guess at values that aren't shown.
+```kotlin
+private fun loadTransactions() {
+    viewModelScope.launch {
+        _uiState.value = TransactionsUiState.Loading
+        try {
+            val transactions = repository.getTransactions()
+            _uiState.value = TransactionsUiState.Success(transactions)
+        } catch (e: Exception) {
+            _uiState.value = TransactionsUiState.Error(e)
+        }
+    }
+}
+```
+
+Note the `_uiState.value = Loading` inside `loadTransactions()` too — not strictly required by the ticket since it's already the initial value, but it matters if this function is ever called again (e.g., a retry), so I'd keep it for correctness even though it's outside what was asked.
+
+One thing worth flagging but not fixing here since it's outside the ticket's scope: catching bare `Exception` will also swallow `CancellationException` in some Kotlin coroutine versions if you're not careful — worth double-checking your coroutine version's behavior, or catching more specific exception types depending on what `repository.getTransactions()` can actually throw.
 
 #### Case 2 - Output
 
@@ -726,40 +741,53 @@ The same rubric must be applied to every model and every case. Scores should be 
 
 | Criterion | ChatGPT Instant | Claude Sonnet 5 Medium |
 |---|---:|---:|
-| Correctness | 5/5 | 5/5 |
-| Groundedness | 5/5 | 5/5 |
-| Requirement Adherence | 5/5 | 5/5 |
-| Unsupported Assumptions | 5/5 | 5/5 |
-| Conciseness and Relevance | 5/5 | 4/5 |
-| **Total** | **25/25** | **24/25** |
+| Correctness | 5/5 | 4/5 |
+| Groundedness | 5/5 | 4/5 |
+| Requirement Adherence | 5/5 | 4/5 |
+| Unsupported Assumptions | 5/5 | 4/5 |
+| Conciseness and Relevance | 5/5 | 3/5 |
+| **Total** | **25/25** | **19/25** |
 
 #### ChatGPT Instant
 
-ChatGPT correctly concluded that neither the retry count nor the retry delay can be determined from the provided information.
+ChatGPT correctly identified that the loading and success states are handled, while the required error state is not.
 
-A particularly strong part of the response was explicitly recognizing that the absence of retry logic in the `ViewModel` does **not** prove that there are zero retries. Retry behavior could exist inside `TransactionsRepository.getTransactions()`.
+It correctly explained that if `repository.getTransactions()` fails, the implementation never updates `_uiState` to an error state.
 
-The response stayed within the available evidence, directly answered both parts of the question, and did not invent retry values or additional requirements.
+The suggested `try/catch` improvement directly addresses the missing ticket requirement. The response explicitly framed the example `TransactionsUiState` structure as an assumption rather than claiming that this structure already exists.
+
+It also avoided expanding the implementation with retry, pagination, caching, empty-state handling, or other requirements not present in the ticket.
 
 **Result: 25/25**
 
 #### Claude Sonnet 5 Medium
 
-Claude reached the same correct conclusion and clearly explained that the repository implementation and networking configuration were not provided.
+Claude correctly identified the same missing requirement: failures from `repository.getTransactions()` are not converted into the required error UI state.
 
-It also correctly refused to infer a retry count or delay from the visible `ViewModel` code.
+The core suggested improvement — handling the failure and updating `_uiState` to an error state — directly addresses the ticket.
 
-The response received one fewer point for conciseness because it expanded into several possible locations where retry behavior might exist, including repository, HTTP client configuration, and server-side behavior. These possibilities are reasonable, but they were not necessary to answer the question.
+However, the response introduced several details beyond what was required:
 
-Importantly, these examples were presented as possibilities rather than facts, so they do not count as unsupported assumptions.
+- it added `_uiState.value = TransactionsUiState.Loading` inside `loadTransactions()` to support a hypothetical future retry;
+- it explicitly discussed retry even though retry behavior is not part of the ticket;
+- it introduced a discussion about `CancellationException` and coroutine-version behavior;
+- the example assumes an `Error(e)` state shape even though the definition of `TransactionsUiState` is not provided.
 
-**Result: 24/25**
+Claude clearly acknowledged that some of these observations were outside the ticket's scope, which limits the severity of the issue. The core review remains correct.
+
+The statement that the uncaught exception means "the app crashes" is also stronger than what can safely be concluded from the provided snippet. What can be established from the code is that the required error state is not emitted; the precise application-level consequence depends on surrounding coroutine exception handling that is not shown.
+
+**Result: 19/25**
 
 #### Case 1 Conclusion
 
-Both models handled the uncertainty correctly and avoided the most important failure mode in this case: interpreting the absence of visible retry logic as evidence of zero retries.
+Both models correctly identified the ticket violation: failure handling is missing and the UI cannot transition to the required error state from the implementation shown.
 
-ChatGPT Instant was slightly more concise, while there was no meaningful difference in correctness or groundedness.
+ChatGPT Instant stayed more closely scoped to the ticket.
+
+Claude Sonnet 5 Medium reached the correct core conclusion but expanded into hypothetical retry behavior, cancellation handling, and an application-crash conclusion that cannot be fully established from the provided code.
+
+This case reinforces the broader pattern observed in the experiment: Claude often provides technically motivated additional context, while ChatGPT Instant tends to remain more strictly bounded by the requirements and evidence provided.
 
 ### Case 2 — Evaluation
 
@@ -945,7 +973,7 @@ This case reinforces the result from Case 1: both models are capable of recogniz
 | Model | Score | Percentage |
 |---|---:|---:|
 | ChatGPT Instant | **125/125** | **100%** |
-| Claude Sonnet 5 Medium | **112/125** | **89.6%** |
+| Claude Sonnet 5 Medium | **107/125** | **85.6%** |
 
 ### Final Observations
 
@@ -976,12 +1004,14 @@ Claude also demonstrated strong technical reasoning and was particularly careful
 
 Across several cases, it explicitly distinguished between what could be observed directly and what would require additional implementation details to verify.
 
-This was especially strong in Case 3, where Claude avoided making assumptions about the structure of `TransactionsUiState`, and in Cases 1 and 5, where it correctly refused to infer retry behavior.
+This was especially strong in Case 3, where Claude avoided making assumptions about the structure of `TransactionsUiState`, and in Case 5, where it correctly refused to infer retry behavior that was not visible in the provided implementation.
 
 However, Claude showed a recurring tendency to expand beyond the exact scope of the ticket.
 
 Examples included:
 
+- adding loading-state behavior for a hypothetical future retry in Case 1;
+- discussing `CancellationException` handling beyond the Case 1 ticket;
 - recommending `Modifier.weight(1f)` in Case 2;
 - discussing parent layout constraints that were not provided;
 - introducing stable `LazyColumn` keys in Case 4;
@@ -1018,3 +1048,17 @@ Claude Sonnet 5 Medium demonstrated excellent awareness of uncertainty, but occa
 For tasks where the objective is strict requirement validation, grounded code review, or determining whether available evidence is sufficient to support a conclusion, **ChatGPT Instant performed better in this experiment**.
 
 The most significant lesson from the comparison is that strong model performance in code review is not only about identifying technically valid improvements. It is also about knowing **when not to infer, when not to expand the scope, and when the correct answer is simply that the available information is insufficient**.
+
+## Reflection
+
+### 1. Go back to your Exercise 1 list. Now that you have seen how your chosen model actually behaves, would you change any of the three labels? Name the task and what changed your mind.
+
+I would keep **"Review Android/Kotlin code before submitting a pull request"** as a **risky fit**. The model was technically strong, but the evaluation showed that it can introduce reasonable-sounding recommendations that are not supported by the ticket, so human review is still necessary before applying its suggestions.
+
+### 2. Which of your real tasks need consistent output between runs, and which benefit from variety? Name at least one of each.
+
+Code review against explicit acceptance criteria benefits from **consistent output**, because the same requirements should lead to the same conclusions regardless of the run. Tasks such as brainstorming technical article ideas or alternative ways to explain an Android concept benefit from **variety**, because different responses can expose useful approaches I had not considered.
+
+### 3. What is the one habit from today you will apply to the next AI feature you build, before you write any code?
+
+Before writing any code, I will define a **small evaluation set with checkable success criteria** for the behavior I expect from the model. This lab showed me that a response can be technically reasonable while still failing the actual task by making unsupported assumptions or expanding beyond the provided requirements.
