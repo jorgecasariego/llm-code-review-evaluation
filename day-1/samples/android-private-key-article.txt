@@ -1,0 +1,186 @@
+Where Should an Android App Store a Private Key?
+Imagine you’re building an Android payment app.
+
+The user opens the app, enters:
+
+$25
+
+selects a recipient, and taps:
+
+Send
+
+At some point, the system needs to answer a surprisingly important question:
+
+How do we prove that this user authorized this payment?
+In a traditional backend-driven application, we might authenticate the user, send an HTTPS request to our server, and let the backend perform the operation.
+
+But some wallet and blockchain architectures introduce another concept:
+
+the device may need to cryptographically sign an operation.
+
+That immediately creates a new mobile engineering problem.
+
+If the Android device needs a private key to sign something:
+
+Where should that private key live?
+A database?
+
+SharedPreferences?
+
+EncryptedSharedPreferences?
+
+A file?
+
+The backend?
+
+Android Keystore?
+
+And what does “signing” even mean?
+
+Before answering the Android question, we need a small amount of cryptography.
+
+ 
+First: what is a private key?
+Forget blockchain for a moment.
+
+Imagine Android generates two mathematically related keys:
+
+Private Key
+Public Key
+
+They have very different jobs.
+
+The private key is secret.
+
+The public key can be shared.
+
+One useful operation we can perform with them is a digital signature.
+
+Suppose our application wants to authorize this message:
+
+Send $25 to Alice
+
+Conceptually, we can do:
+
+message
+  +
+private key
+  ↓
+SIGN
+  ↓
+digital signature
+
+Someone who knows the corresponding public key can then verify that signature.
+
+message
+  +
+signature
+  +
+public key
+  ↓
+VERIFY
+  ↓
+valid / invalid
+
+The important part is this:
+
+the verifier does not need the private key.
+
+And the private key does not need to travel with the transaction.
+
+That gives us our first mental model:
+
+A private key creates signatures.
+A public key verifies them.
+There is a lot more cryptography behind this, but this model is enough to understand the Android security problem.
+
+ 
+[DIAGRAM 1 — Private Key, Public Key, and Digital Signature]
+
+Show:
+
+                   PRIVATE KEY
+                        │
+                        │ secret
+                        ▼
+
+"Send $25 to Alice" ──→ SIGN ──→ Signature
+                                    │
+                                    │
+                                    ▼
+
+"Send $25 to Alice" + Signature + PUBLIC KEY
+                        │
+                        ▼
+                      VERIFY
+                        │
+                   valid / invalid
+
+Important visual message:
+
+The private key never goes to the verifier.
+
+Goal: someone with no cryptography background should understand signing and verification from this diagram alone.
+
+ 
+Signing is not encryption
+This distinction is worth making early because the terminology is easy to mix up.
+
+When we encrypt something, our main goal is usually confidentiality:
+
+Other people should not be able to read this data.
+When we sign something, our goal is different:
+
+Someone should be able to verify that the holder of a particular private key authorized these exact bytes.
+For our payment example, we don’t necessarily want to hide:
+
+Send $25 to Alice
+
+Instead, we want to prove that it was authorized.
+
+So:
+
+Encryption → "Can somebody read this?"
+
+Signature → "Can somebody verify who authorized this data
+            and that it wasn't modified?"
+
+These are different cryptographic operations solving different problems.
+
+ 
+What happens if the transaction changes?
+This is where signatures become particularly useful.
+
+Imagine we sign:
+
+Send $25 to Alice
+
+An attacker intercepts the request and changes it to:
+
+Send $2,500 to Mallory
+
+The original signature was created for the original data.
+
+The modified data should therefore fail signature verification.
+
+Conceptually:
+
+SIGNED
+
+Send $25 to Alice
+       ↓
+   Signature ABC
+
+But:
+
+Send $2,500 to Mallory
+       +
+   Signature ABC
+       ↓
+     VERIFY
+       ↓
+     INVALID
+
+This is why signing an operation is more than attaching a secret token to a request.
+
+The signature is tied to the data being authorized.
