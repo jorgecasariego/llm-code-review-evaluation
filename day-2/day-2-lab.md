@@ -1667,6 +1667,233 @@ RAG therefore needs evaluation at multiple stages: retrieval quality, grounding 
 
 ## Exercise 5 — Tool / Function Calling
 
+### Two-tool manual exchange
+
+Because I used the by-hand path, I manually wrote out the message sequence for a request that requires two tools.
+
+#### User message
+
+```text
+USER
+
+What is 15% of 4,000, and what is that in euros?
+```
+
+The request requires two separate operations:
+
+1. Calculate 15% of 4,000.
+2. Convert the resulting monetary amount to euros.
+
+---
+
+#### Assistant tool request — Calculator
+
+```text
+ASSISTANT
+
+TOOL_CALL
+
+call_id: call_calculator_001
+name: calculator
+arguments:
+  expression: "4000 * 0.15"
+```
+
+The application records the assistant's tool request before executing it.
+
+After validating the request, the calculator is executed.
+
+#### Tool result — Calculator
+
+```text
+TOOL_RESULT
+
+call_id: call_calculator_001
+name: calculator
+result:
+  value: 600
+```
+
+The `call_id` matches the original calculator request so that the application and model can correlate the result with the correct tool call.
+
+At this point, the model knows that 15% of 4,000 is 600, but it still needs the currency conversion.
+
+---
+
+#### Assistant tool request — Currency conversion
+
+```text
+ASSISTANT
+
+TOOL_CALL
+
+call_id: call_currency_002
+name: convert_currency
+arguments:
+  amount: 600
+  from_currency: "USD"
+  to_currency: "EUR"
+```
+
+Before executing the tool, the application validates:
+
+```text
+amount > 0                          → PASS
+from_currency is supported         → PASS
+to_currency is supported           → PASS
+```
+
+The application can now execute the currency conversion.
+
+For this manual experiment, assume the currency service returns the following simulated result:
+
+```text
+1 USD = 0.85 EUR
+```
+
+#### Tool result — Currency conversion
+
+```text
+TOOL_RESULT
+
+call_id: call_currency_002
+name: convert_currency
+result:
+  amount: 600
+  from_currency: "USD"
+  to_currency: "EUR"
+  exchange_rate: 0.85
+  converted_amount: 510
+```
+
+Again, the `call_id` matches the corresponding tool request.
+
+---
+
+#### Assistant final answer
+
+```text
+ASSISTANT
+
+15% of 4,000 is 600 USD. Using the provided conversion rate of 1 USD = 0.85 EUR, that is 510 EUR.
+```
+
+### Message sequence
+
+The complete interaction can be represented as:
+
+```text
+User
+  ↓
+"What is 15% of 4,000, and what is that in euros?"
+  ↓
+Assistant
+TOOL_CALL
+call_id: call_calculator_001
+calculator("4000 * 0.15")
+  ↓
+Tool
+TOOL_RESULT
+call_id: call_calculator_001
+600
+  ↓
+Assistant
+TOOL_CALL
+call_id: call_currency_002
+convert_currency(600, "USD", "EUR")
+  ↓
+Tool
+TOOL_RESULT
+call_id: call_currency_002
+510 EUR
+  ↓
+Assistant
+"15% of 4,000 is 600 USD.
+Using the provided conversion rate,
+that is 510 EUR."
+```
+
+This exchange demonstrates that each assistant tool request is recorded before its corresponding result is returned, and each result is correlated with the original request through its `call_id`.
+
+The model does not execute either operation directly. It requests the tools, while the application validates the arguments, executes the operations, and returns the results.
+
+### State-changing tool considerations
+
+The `convert_currency` tool is read-only, so executing it does not modify external state.
+
+If the tool were instead:
+
+```text
+send_payment(amount, recipient)
+```
+
+I would change how it is exposed in two important ways.
+
+#### 1. Require application-side authorization
+
+Before executing the payment, the application must verify that the authenticated user is authorized to send money from the relevant account.
+
+A model-generated tool request must never be treated as authorization.
+
+```text
+Model requests:
+send_payment(500, "recipient-123")
+        ↓
+Application checks authorization
+        ↓
+Authorized?
+   /         \
+ NO           YES
+ ↓             ↓
+Reject      Continue
+```
+
+This authorization check must happen outside the model and cannot be replaced by prompt instructions.
+
+#### 2. Require explicit user confirmation
+
+Even when the arguments are valid and the user is authorized, the application should require explicit confirmation before executing the payment.
+
+```text
+Model requests payment
+        ↓
+Validate arguments
+        ↓
+Check authorization
+        ↓
+Show payment details to user
+        ↓
+User explicitly confirms?
+    /              \
+  NO                YES
+  ↓                  ↓
+Cancel          Execute payment
+```
+
+This is especially important because the prompt-injection experiment in Exercise 1 demonstrated that user-controlled content may contain instructions attempting to influence model behavior.
+
+For a state-changing operation, the model may request an action, but it should not have the authority to execute that action by itself.
+
+The security boundary therefore remains in the application:
+
+```text
+LLM request
+    ↓
+Untrusted proposal
+    ↓
+Application validation
+    ↓
+Authorization
+    ↓
+Explicit user confirmation
+    ↓
+Execution
+```
+
+---
+
+### Additional experiment — Order status tool
+
 ### Goal
 
 The goal of this exercise was to understand how a language model can request an external tool while keeping the application responsible for validation and execution.
