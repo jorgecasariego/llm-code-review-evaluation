@@ -731,29 +731,80 @@ If validation fails, the application rejects the response instead of treating ma
 
 ### Normal input test
 
-The prompt was executed manually using a private Gemini conversation.
+The normal input was executed manually in a new Gemini conversation using the validated ticket and Android/Kotlin implementation.
 
-Because the test was performed manually, the exact original output is no longer available for verification, and the actual API `stop_reason` was not observable.
+#### Input
 
-The response was visually reviewed at the time and contained the expected semantic sections:
+```text
+Ticket:
+AND001 - Load a list of transactions when the screen opens.
 
-- Requirement gaps
-- Suggested improvements
-- Conclusion
+Requirements:
+- Show a loading state while transactions are being fetched.
+- Display the transaction list when the request succeeds.
+- Show an error state if the request fails.
 
-However, the application-side validator defined earlier requires the exact literal headings:
+Code:
+class TransactionsViewModel(
+    private val repository: TransactionsRepository
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow<TransactionsUiState>(
+        TransactionsUiState.Loading
+    )
+
+    val uiState: StateFlow<TransactionsUiState> = _uiState
+
+    init {
+        loadTransactions()
+    }
+
+    private fun loadTransactions() {
+        viewModelScope.launch {
+            val transactions = repository.getTransactions()
+            _uiState.value = TransactionsUiState.Success(transactions)
+        }
+    }
+}
+```
+
+#### Gemini output
 
 ```text
 1. Requirement gaps
+
+The implementation lacks error handling. If `repository.getTransactions()` throws an exception, the app will not show the required error state.
+
 2. Suggested improvements
+
+- Wrap the repository call in a `try-catch` block inside `loadTransactions()`.
+- Emit `TransactionsUiState.Error` when an exception is caught.
+- Expose a public `retry()` function to let users reload data after a failure.
+
 3. Conclusion
+
+The ViewModel correctly uses coroutines and StateFlow, but it requires exception handling to fully satisfy the error state requirement.
 ```
 
-Since the original output is no longer available, it cannot be verified whether it would have passed this strict structural validator exactly.
+#### Output validation
 
-This highlights an important evaluation lesson: a response that appears structurally correct to a human may still fail a brittle application-side validator if the expected format is enforced literally.
+The generated response contains all three literal headings required by the application-side validator:
 
-A production implementation should either require a stricter structured output contract or make the validator tolerant of equivalent formatting variations.
+```text
+1. Requirement gaps        → PASS
+2. Suggested improvements  → PASS
+3. Conclusion              → PASS
+```
+
+Therefore:
+
+```text
+isValidReview(response.text) == true
+```
+
+**Output validation result: PASS**
+
+Because this test was executed manually in Gemini rather than through an API, the actual API `stop_reason` was not observable. Therefore, this experiment verifies the generated content and application-side structural validation, but does not claim that an API stop reason was inspected.
 
 ### Complete pseudocode
 
@@ -869,9 +920,9 @@ The model is never called.
 
 ### Simulated forced truncation test
 
-Because I completed this exercise using the by-hand path rather than the API scripts, I could not configure or inspect a real API `max_tokens` / `stop_reason` value.
+Because this exercise was completed using the by-hand path in Gemini rather than through an API, I could not configure a real `max_tokens` value or inspect an API `stop_reason`.
 
-To simulate the behavior, assume the application makes the following call with an intentionally small output cap:
+To demonstrate the intended failure path, I simulated the application calling the model with an intentionally very small output cap:
 
 ```kotlin
 val response = model.generate(
@@ -880,27 +931,62 @@ val response = model.generate(
 )
 ```
 
-A possible truncated output would be:
+With such a small cap, a response could be truncated before completing all required sections.
+
+For example:
 
 ```text
 1. Requirement gaps
 
-- The implementation does not handle failures from `repository.getTransactions()`, so the required error state
+The implementation does not handle failures from `repository.getTransactions()`, so the required error state
 ```
 
-The corresponding simulated stop reason would be:
+The simulated metadata for this case would be:
 
 ```text
-max_tokens
+stop_reason = max_tokens
 ```
 
-**Handling:**
+The application handling is:
 
-The application should reject this response even though part of the generated text appears useful.
+```text
+if (response.stopReason == MAX_TOKENS) {
+    return ReviewResult.Error(
+        "The generated review was truncated"
+    )
+}
+```
 
-A `max_tokens` stop reason indicates that generation reached the configured output ceiling, so the response may be incomplete and should not be treated as a valid code review.
+The partial response must not be accepted even though the beginning appears valid.
 
-This test demonstrates why checking the stop reason is necessary: receiving syntactically valid text does not mean that generation completed successfully.
+It fails for two reasons:
+
+```text
+Generation stopped because of the output cap
+        ↓
+Response may be incomplete
+        ↓
+Required output sections may be missing
+        ↓
+Reject response
+```
+
+In this simulated example, the structural validator would also fail because the response does not contain:
+
+```text
+2. Suggested improvements
+3. Conclusion
+```
+
+Therefore:
+
+```text
+Stop-reason validation: FAIL
+Structural output validation: FAIL
+Application result: REJECTED
+```
+
+**Important:** the truncated text and `max_tokens` stop reason above are simulated to demonstrate the failure-handling logic. They were not observed from the Gemini UI.
 
 ## Exercise 3 — Chat State and Trimming
 
@@ -2693,56 +2779,14 @@ Tool calling therefore extends what an LLM-powered application can do, but autho
 
 ## Reflection
 
-### 1. What did you learn about controlling model behavior?
+### 1. Of the four patterns built today, which would you reach for first on your real task, and what would you not need?
 
-One of the main things I learned is that prompt design has a direct impact on the quality and shape of the model's response.
+For my Android/Kotlin code review task, I would start with the defensive single-shot pattern because the ticket and source code already provide the context required for the review. I would not initially need conversation state, RAG, or tools, since the first version of this feature does not require remembering previous interactions, retrieving external knowledge, or performing external actions.
 
-In Exercise 1, adding a clear role and audience made the Android code review more technical and specialized. However, it also encouraged the model to introduce additional recommendations and assumptions that were not explicitly supported by the input.
+### 2. Which deliberate failure surprised you most — truncation, trimmed memory, confident wrong answer, or injection?
 
-Reducing the number of sections and adding explicit length constraints produced much more concise and focused responses.
+The trimmed-memory experiment surprised me most because removing only the older turns caused the model to lose a fact that had previously seemed to be part of the conversation: the application name `Orbit`. Comparing that result with summarization made it clear that conversation memory is really an application-level context-management problem, not something I should assume the model will preserve automatically.
 
-I also found the combination of delimiters and explicit trust-boundary instructions particularly interesting. Treating delimited user content as untrusted data helped the model ignore prompt-injection attempts embedded inside the content being analyzed.
+### 3. Name one thing you built today that you now believe is a correctness requirement rather than a nice-to-have, and why?
 
-However, delimiters are not a complete security boundary. Actions with real consequences must still be controlled by the application.
-
-### 2. What application responsibilities cannot be delegated to the model?
-
-Exercise 2 showed that receiving text from the model is not enough. The application must inspect metadata such as the stop reason before accepting the response. A response stopped because of a token limit, for example, may look valid while actually being incomplete.
-
-Exercise 3 also showed that conversation state is an application responsibility. Independent LLM API requests do not inherently preserve the application's conversation state, so the application must provide persistent instructions and the relevant conversation context with subsequent requests.
-
-This has direct implications for cost and latency. Very large persistent instructions and continuously growing conversation histories increase the amount of context processed on each request.
-
-For long conversations, summarizing older interactions can preserve important facts while reducing token usage. In our experiment, trimming removed the application name `Orbit`, while summarization preserved it using much less historical context.
-
-Exercise 5 reinforced the same principle for tools. Model-generated tool calls and arguments must be treated as untrusted input. The application must validate arguments, enforce authorization and business rules, and bound tool-call loops.
-
-For destructive or dangerous operations such as `delete_record`, application-side authorization and explicit human confirmation should be required before execution.
-
-### 3. What surprised you most about building reliable LLM applications?
-
-One of the most interesting lessons was that a response can look trustworthy without actually being well grounded.
-
-In the RAG experiment, formatted citations made answers appear more authoritative, but a citation alone does not prove that the cited chunk supports the generated claim. The application may need to verify that the cited evidence actually contains the information being asserted.
-
-The RAG experiments also showed that a bad answer is not necessarily a generation problem. The model may behave correctly but receive the wrong context because retrieval failed.
-
-Across the exercises, the recurring pattern was:
-
-```text
-LLM output is probabilistic
-          ↓
-Application adds control
-          ↓
-Validate input
-Control context
-Inspect stop reason
-Validate output
-Verify retrieved evidence
-Validate tool calls
-Require authorization when necessary
-          ↓
-Reliable application behavior
-```
-
-The biggest takeaway for me is that reliability does not come only from writing a better prompt. It comes from designing the application around the model with validation, context management, retrieval checks, explicit trust boundaries, and controlled tool execution.
+Application-side validation now feels like a correctness requirement rather than a nice-to-have. A model can return plausible-looking text, truncated output, unsupported claims, or invalid tool arguments, so the application must validate what the model produces before treating it as a successful result.
