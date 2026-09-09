@@ -239,8 +239,6 @@ Adding the Senior Android Engineer role and Android development team audience ma
 
 **Prompt**
 
-**Prompt**
-
 ```text
 You are a Senior Android Engineer reviewing code for an Android development team.
 
