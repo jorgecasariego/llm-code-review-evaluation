@@ -1585,23 +1585,81 @@ But they require different fixes.
 
 ## Unrelated-topic behavior
 
-A grounded RAG pipeline should also handle questions that are unrelated to the knowledge base.
+The final test checks how the RAG pipeline behaves when the user's question is completely unrelated to the Nebula knowledge base.
 
-If retrieval produces no relevant chunks for an unrelated question, the application should ideally short-circuit before calling the model.
+### Question
+
+```text
+What is the capital of Paraguay?
+```
+
+This question has no relationship to the fictional Nebula Internal Mobile Development Platform or any of the ten facts contained in the corpus.
+
+### Retrieval result
+
+Using the same simulated retrieval approach:
+
+```text
+Retrieved chunks: none
+```
+
+No chunk in the Nebula corpus contains relevant information for answering the question.
+
+### Application behavior
+
+Because retrieval returned no relevant chunks, the application short-circuits the RAG pipeline before calling the language model.
+
+Conceptually:
+
+```text
+Question
+"What is the capital of Paraguay?"
+              ↓
+          Retrieval
+              ↓
+     Retrieved chunks: none
+              ↓
+     Application detects
+       empty retrieval
+              ↓
+         Short-circuit
+              ↓
+     Return fallback
+```
+
+The application returns:
+
+```text
+No relevant information was found in the knowledge base.
+```
+
+### Was the model called?
+
+```text
+No.
+```
+
+The response above is an application-generated fallback, not a model-generated answer.
+
+This distinction is important because a general-purpose language model may already know the answer to the question. However, this RAG pipeline is designed to answer using only evidence retrieved from the Nebula knowledge base.
+
+Allowing the model to answer from its own knowledge after retrieval fails would break the grounding contract established for this experiment.
+
+### Result
 
 ```text
 Unrelated question
-       ↓
-Retriever
-       ↓
+        ↓
 No relevant chunks
-       ↓
-Application fallback
-       ↓
-No model call
+        ↓
+Application short-circuit
+        ↓
+LLM not called
+        ↓
+Safe fallback response
 ```
 
-Passing unrelated chunks to the model would increase the risk of producing an answer that appears grounded even though the retrieved evidence is irrelevant.
+**Result: Unrelated-topic short-circuit — PASS**
 
 ---
 
