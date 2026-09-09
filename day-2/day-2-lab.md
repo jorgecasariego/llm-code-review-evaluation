@@ -1667,6 +1667,116 @@ RAG therefore needs evaluation at multiple stages: retrieval quality, grounding 
 
 ## Exercise 5 — Tool / Function Calling
 
+### Required calculator tool experiment
+
+#### Tool 2 — Currency conversion
+
+For the calculator example, I designed a second tool that converts a monetary amount from one currency to another.
+
+**Name**
+
+`convert_currency`
+
+**Description**
+
+Converts a monetary amount from one currency to another using the application's currency conversion service.
+
+Use this tool when the user asks to convert a specific monetary amount from one currency into another currency.
+
+Do not use this tool for arithmetic that does not require currency conversion.
+
+**Parameters**
+
+- `amount`: number — the monetary amount to convert.
+- `from_currency`: string — the source currency using a three-letter currency code.
+- `to_currency`: string — the target currency using a three-letter currency code.
+
+**Tool schema**
+
+```json
+{
+  "name": "convert_currency",
+  "description": "Converts a monetary amount from one currency to another. Use this tool when the user requests conversion of a specific amount between two currencies.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "amount": {
+        "type": "number"
+      },
+      "from_currency": {
+        "type": "string"
+      },
+      "to_currency": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "amount",
+      "from_currency",
+      "to_currency"
+    ]
+  }
+}
+```
+
+#### Argument validation
+
+Before executing `convert_currency`, the application validates the model-generated arguments.
+
+The model may decide that the tool is appropriate and generate its arguments, but those arguments must still be treated as untrusted input by the application.
+
+##### Validation 1 — Amount must be greater than zero
+
+```text
+Check:
+amount > 0
+
+Failure result:
+{
+  "success": false,
+  "error": "INVALID_AMOUNT",
+  "message": "Amount must be greater than zero."
+}
+```
+
+This prevents invalid conversions with zero or negative monetary amounts.
+
+##### Validation 2 — Source currency must be supported
+
+```text
+Check:
+from_currency must be included in the application's supported currencies.
+
+Failure result:
+{
+  "success": false,
+  "error": "UNSUPPORTED_SOURCE_CURRENCY",
+  "message": "The source currency is not supported."
+}
+```
+
+This prevents the application from attempting a conversion from a currency that the conversion service does not support.
+
+##### Validation 3 — Target currency must be supported
+
+```text
+Check:
+to_currency must be included in the application's supported currencies.
+
+Failure result:
+{
+  "success": false,
+  "error": "UNSUPPORTED_TARGET_CURRENCY",
+  "message": "The target currency is not supported."
+}
+```
+
+This prevents the application from attempting a conversion to a currency that the conversion service does not support.
+
+If any validation fails, the currency conversion service is not executed. The application still returns an explicit error result for the failed tool request instead of silently dropping it.
+
+**Assumption for this manual experiment:** The user's question asks for the result "in euros" but does not specify the source currency. For this manual example, I assume the original amount is in USD. In a production application, the system should not silently make this assumption and should ask the user to specify the source currency before executing `convert_currency`.
+
 ### Two-tool manual exchange
 
 Because I used the by-hand path, I manually wrote out the message sequence for a request that requires two tools.
