@@ -1,5 +1,7 @@
 # Day 3 Lab — Decide, Safeguard, and Ship
 
+**Path used:** Written alternative for the fixed-seed image exercise; manual/by-hand evaluation for the remaining exercises.
+
 ## Exercise 1 — Diagnose the approach
 
 ### Part A — Four scenarios
